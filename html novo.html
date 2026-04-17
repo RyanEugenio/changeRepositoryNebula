@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Correlação de Inventário: MAC/Serial -> devId</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 30px; background-color: #f8f9fa; color: #333; max-width: 1200px; margin: 0 auto; }
+        h2 { margin-top: 0; color: #0056b3; }
+        label { font-weight: bold; display: block; margin-top: 20px; margin-bottom: 5px; color: #495057; }
+        input[type="text"] { width: 100%; padding: 10px; font-family: monospace; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 14px; }
+        textarea { width: 100%; height: 150px; padding: 10px; font-family: monospace; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; white-space: pre; overflow-wrap: normal; overflow-x: scroll; font-size: 13px; }
+        button { margin-top: 20px; padding: 12px 24px; background-color: #0d6efd; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: bold; transition: background 0.2s; }
+        button:hover { background-color: #0b5ed7; }
+        .caixa-resultado { margin-top: 30px; padding: 20px; background: #fff; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .titulo-resultado { color: #198754; border-bottom: 2px solid #198754; padding-bottom: 10px; margin-top: 0; }
+        #resultadoArea { display: none; }
+    </style>
+</head>
+<body>
+
+    <h2>Ferramenta de Cruzamento de Inventário v2</h2>
+    <p>Cruza os dados e gera o retorno para o Excel e o Payload JSON pronto para API.</p>
+
+    <label>1. ID da Organização (orgId):</label>
+    <input type="text" id="orgIdInput" value="68f8df6c2f79267a966d8367" placeholder="Cole o orgId aqui...">
+    
+    <label>2. Cole o código do JSON original (onde estão todos os devices):</label>
+    <textarea id="jsonInput" placeholder='Exemplo: [{ "siteId": "...", "devices": [...] }]'></textarea>
+    
+    <label>3. Cole os dados da Planilha (copie direto do Excel com os cabeçalhos):</label>
+    <textarea id="excelInput" placeholder="Device name&#9;MAC address&#9;Serial number..."></textarea>
+    
+    <button onclick="cruzarDados()">Processar Dados</button>
+
+    <div id="resultadoArea">
+        
+        <div class="caixa-resultado">
+            <h3 class="titulo-resultado">Resultado 1: Planilha Atualizada</h3>
+            <p>Copie o texto abaixo e cole de volta no seu Excel/Google Sheets:</p>
+            <textarea id="resultadoOutput" readonly></textarea>
+        </div>
+
+        <div class="caixa-resultado" style="margin-top: 20px;">
+            <h3 class="titulo-resultado" style="color: #6f42c1; border-color: #6f42c1;">Resultado 2: Arquivo JSON Pronto</h3>
+            <p>Lista gerada contendo apenas os IDs dos dispositivos validados na planilha:</p>
+            <textarea id="jsonSaidaOutput" readonly style="height: 250px;"></textarea>
+        </div>
+
+    </div>
+
+    <script>
+        function cruzarDados() {
+            try {
+                const orgIdText = document.getElementById('orgIdInput').value.trim();
+                const jsonText = document.getElementById('jsonInput').value;
+                const excelText = document.getElementById('excelInput').value;
+                
+                if (!jsonText || !excelText) {
+                    alert("Por favor, preencha o JSON original e os dados da planilha.");
+                    return;
+                }
+
+                // 1. Processar o JSON original para criar um mapa de busca rápida
+                const jsonData = JSON.parse(jsonText);
+                const mapDevId = {}; 
+                
+                jsonData.forEach(site => {
+                    if (site.devices) {
+                        site.devices.forEach(device => {
+                            if (device.mac) mapDevId[device.mac.toUpperCase().trim()] = device.devId;
+                            if (device.sn) mapDevId[device.sn.toUpperCase().trim()] = device.devId;
+                        });
+                    }
+                });
+
+                // 2. Lidar com o Excel
+                const linhas = excelText.split('\n');
+                if (linhas.length === 0) return;
+
+                const cabecalho = linhas[0].split('\t');
+                const indexMac = cabecalho.findIndex(c => c.toLowerCase().includes('mac'));
+                const indexSn = cabecalho.findIndex(c => c.toLowerCase().includes('serial') || c.toLowerCase().includes('sn'));
+
+                let resultadoExcel = cabecalho.join('\t') + '\tdevId\n';
+                let devIdsEncontrados = []; // Array para guardar os IDs pro JSON final
+
+                // 3. Varrer a planilha e cruzar
+                for (let i = 1; i < linhas.length; i++) {
+                    if (!linhas[i].trim()) continue; 
+                    
+                    const colunas = linhas[i].split('\t');
+                    let devIdEncontrado = "NÃO LOCALIZADO NO JSON";
+
+                    if (indexMac !== -1 && colunas[indexMac]) {
+                        const mac = colunas[indexMac].toUpperCase().trim();
+                        if (mapDevId[mac]) devIdEncontrado = mapDevId[mac];
+                    }
+                    
+                    if (devIdEncontrado === "NÃO LOCALIZADO NO JSON" && indexSn !== -1 && colunas[indexSn]) {
+                        const sn = colunas[indexSn].toUpperCase().trim();
+                        if (mapDevId[sn]) devIdEncontrado = mapDevId[sn];
+                    }
+
+                    resultadoExcel += colunas.join('\t') + '\t' + devIdEncontrado + '\n';
+
+                    // Se achou um ID válido, joga na lista do nosso JSON final
+                    if (devIdEncontrado !== "NÃO LOCALIZADO NO JSON") {
+                        devIdsEncontrados.push(devIdEncontrado);
+                    }
+                }
+
+                // 4. Montar o JSON Final
+                const payloadJson = {
+                    devices: devIdsEncontrados,
+                    orgId: orgIdText
+                };
+
+                // Exibir na tela
+                document.getElementById('resultadoOutput').value = resultadoExcel;
+                document.getElementById('jsonSaidaOutput').value = JSON.stringify(payloadJson, null, 4);
+                
+                document.getElementById('resultadoArea').style.display = 'block';
+
+            } catch (erro) {
+                alert("Ocorreu um erro. Verifique se o JSON colado é válido.\nDetalhe: " + erro.message);
+            }
+        }
+    </script>
+</body>
+</html>
